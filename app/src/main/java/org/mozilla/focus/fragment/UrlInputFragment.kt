@@ -40,6 +40,7 @@ import mozilla.components.ui.autocomplete.InlineAutocompleteEditText.Autocomplet
 import org.mozilla.focus.R
 import org.mozilla.focus.R.string.pref_key_homescreen_tips
 import org.mozilla.focus.R.string.teaser
+import org.mozilla.focus.ext.components
 import org.mozilla.focus.ext.isSearch
 import org.mozilla.focus.ext.requireComponents
 import org.mozilla.focus.locale.LocaleAwareAppCompatActivity
@@ -307,7 +308,7 @@ class UrlInputFragment :
         if (isOverlay) {
             keyboardLinearLayout?.visibility = View.GONE
         } else {
-            backgroundView?.setBackgroundResource(R.drawable.background_gradient)
+            backgroundView?.setBackgroundResource(R.drawable.circular_reveal_background_gradient)
 
             dismissView?.visibility = View.GONE
 
@@ -367,6 +368,11 @@ class UrlInputFragment :
     fun onBackPressed(): Boolean {
         if (isOverlay) {
             animateAndDismiss()
+            return true
+        } else if (fragmentManager?.findFragmentByTag(BrowserFragment.FRAGMENT_TAG) != null) {
+            if (components?.sessionManager?.sessions?.size ?: 0 > 0) {
+                fragmentManager?.popBackStack()
+            }
             return true
         }
 

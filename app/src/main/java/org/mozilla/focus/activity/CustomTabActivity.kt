@@ -18,7 +18,7 @@ class CustomTabActivity : MainActivity() {
 
     private val customTabSession: Session by lazy {
         components.sessionManager.findSessionById(customTabId)
-            ?: throw IllegalAccessError("No session wiht id $customTabId")
+            ?: throw IllegalAccessError("No session with id $customTabId")
     }
 
     override val currentSessionForActivity: Session by lazy { customTabSession }

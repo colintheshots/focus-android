@@ -41,7 +41,7 @@ import org.mozilla.focus.web.WebViewProvider
 import java.util.HashMap
 
 @Suppress("TooManyFunctions")
-class SystemWebView(context: Context, attrs: AttributeSet) : NestedWebView(context, attrs), IWebView,
+class SystemWebView(context: Context, attrs: AttributeSet?) : NestedWebView(context, attrs), IWebView,
     SharedPreferences.OnSharedPreferenceChangeListener {
 
     private var callback: IWebView.Callback? = null

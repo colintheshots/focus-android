@@ -107,6 +107,7 @@ object TelemetryWrapper {
     private object Object {
         val SEARCH_BAR = "search_bar"
         val ERASE_BUTTON = "erase_button"
+        val ERASE_SINGLE_TAB_BUTTON = "erase_single_tab_button"
         val SETTING = "setting"
         val APP = "app"
         val MENU = "menu"
@@ -510,6 +511,12 @@ object TelemetryWrapper {
     @JvmStatic
     fun eraseEvent() {
         withSessionCounts(TelemetryEvent.create(Category.ACTION, Method.CLICK, Object.ERASE_BUTTON))
+                .queue()
+    }
+
+    @JvmStatic
+    fun eraseSingleTabEvent() {
+        withSessionCounts(TelemetryEvent.create(Category.ACTION, Method.CLICK, Object.ERASE_SINGLE_TAB_BUTTON))
                 .queue()
     }
 

@@ -55,28 +55,13 @@
             <include
                 layout="@layout/browser_display_toolbar"/>
 
-            <org.mozilla.focus.widget.FloatingSessionsButton
-                android:id="@+id/tabs"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="end|bottom"
-                android:layout_marginBottom="@dimen/floating_action_button_margin"
-                android:layout_marginEnd="@dimen/floating_action_button_margin"
-                android:elevation="4dp"
-                android:visibility="gone"
-                app:backgroundTint="@color/colorMultitasking"
-                app:rippleColor="@color/colorMultitaskingPressed"
-                app:layout_behavior="org.mozilla.focus.widget.FloatingActionButtonBehavior"
-                app:fabSize="normal"
-                app:layout_dodgeInsetEdges="bottom"/>
-
             <org.mozilla.focus.widget.FloatingEraseButton
                 android:id="@+id/erase"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="end|bottom"
-                android:layout_marginBottom="@dimen/floating_action_button_margin"
-                android:layout_marginEnd="@dimen/floating_action_button_margin"
+                android:layout_marginBottom="@dimen/floating_action_button_bottom_margin"
+                android:layout_marginEnd="@dimen/floating_action_button_end_margin"
                 android:elevation="4dp"
                 android:src="@drawable/ic_delete"
                 app:backgroundTint="@color/colorErase"
@@ -96,21 +81,32 @@
                 android:visibility="gone"
                 app:layout_behavior="@string/appbar_scrolling_view_behavior"
                 app:layout_insetEdge="bottom"/>
+
+            <FrameLayout
+                android:id="@+id/popup_tint"
+                android:visibility="gone"
+                android:background="@android:color/black"
+                android:alpha=".5"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"/>
+
+            <include
+                layout="@layout/bottom_sheet_sessions"/>
+
         </org.mozilla.focus.widget.ResizableKeyboardCoordinatorLayout>
     </LinearLayout>
-
-    <FrameLayout
-        android:id="@+id/popup_tint"
-        android:visibility="gone"
-        android:background="@android:color/black"
-        android:alpha=".5"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"/>
 
     <FrameLayout
         android:id="@+id/video_container"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@android:color/black"
+        android:visibility="gone" />
+
+    <View
+        android:id="@+id/circular_reveal_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/circular_reveal_background_gradient"
         android:visibility="gone" />
 </FrameLayout>

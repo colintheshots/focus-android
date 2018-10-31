@@ -565,7 +565,7 @@ class GeckoWebViewProvider : IWebViewProvider {
         }
 
         override fun restoreWebViewState(session: Session) {
-            val stateData = session.savedWebViewState!!
+            val stateData = session.savedWebViewState ?: return
             val savedSession = stateData.getParcelable<GeckoSession>(GECKO_SESSION)!!
 
             if (geckoSession != savedSession && !restored) {

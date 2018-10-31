@@ -25,7 +25,6 @@ import org.mozilla.focus.fragment.UrlInputFragment
 import org.mozilla.focus.locale.LocaleAwareAppCompatActivity
 import org.mozilla.focus.session.IntentProcessor
 import org.mozilla.focus.session.removeAndCloseAllSessions
-import org.mozilla.focus.session.ui.SessionsSheetFragment
 import org.mozilla.focus.settings.ExperimentsSettingsFragment
 import org.mozilla.focus.shortcut.HomeScreen
 import org.mozilla.focus.telemetry.TelemetryWrapper
@@ -306,15 +305,6 @@ open class MainActivity : LocaleAwareAppCompatActivity() {
 
     override fun onBackPressed() {
         val fragmentManager = supportFragmentManager
-
-        val sessionsSheetFragment = fragmentManager.findFragmentByTag(
-            SessionsSheetFragment.FRAGMENT_TAG) as SessionsSheetFragment?
-        if (sessionsSheetFragment != null &&
-                sessionsSheetFragment.isVisible &&
-                sessionsSheetFragment.onBackPressed()) {
-            // SessionsSheetFragment handles back presses itself (custom animations).
-            return
-        }
 
         val urlInputFragment = fragmentManager.findFragmentByTag(UrlInputFragment.FRAGMENT_TAG) as UrlInputFragment?
         if (urlInputFragment != null &&

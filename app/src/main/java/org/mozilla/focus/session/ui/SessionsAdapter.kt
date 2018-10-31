@@ -1,82 +1,92 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+@file:Suppress("TooManyFunctions")
 
 package org.mozilla.focus.session.ui
 
 import android.support.v7.widget.RecyclerView
 import android.view.LayoutInflater
 import android.view.ViewGroup
-import android.widget.TextView
+import android.widget.RelativeLayout
 import mozilla.components.browser.session.Session
 import mozilla.components.browser.session.SessionManager
 import org.mozilla.focus.ext.requireComponents
+import org.mozilla.focus.fragment.BrowserFragment
 
 /**
  * Adapter implementation to show a list of active browsing sessions and an "erase" button at the end.
  */
 class SessionsAdapter internal constructor(
-    private val fragment: SessionsSheetFragment,
+    private val fragment: BrowserFragment,
     private var sessions: List<Session> = emptyList()
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>(), SessionManager.Observer {
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val inflater = LayoutInflater.from(parent.context)
 
-        return when (viewType) {
-            EraseViewHolder.LAYOUT_ID -> EraseViewHolder(
-                fragment,
-                inflater.inflate(EraseViewHolder.LAYOUT_ID, parent, false)
-            )
-            SessionViewHolder.LAYOUT_ID -> SessionViewHolder(
-                fragment,
-                inflater.inflate(SessionViewHolder.LAYOUT_ID, parent, false) as TextView
-            )
-            else -> throw IllegalStateException("Unknown viewType")
-        }
+        return SessionViewHolder(
+            fragment,
+            inflater.inflate(SessionViewHolder.LAYOUT_ID, parent, false) as RelativeLayout
+        )
     }
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-        when (holder.itemViewType) {
-            EraseViewHolder.LAYOUT_ID -> { /* Nothing to do */ }
-            SessionViewHolder.LAYOUT_ID -> (holder as SessionViewHolder).bind(sessions[position])
-            else -> throw IllegalStateException("Unknown viewType")
-        }
+        (holder as SessionViewHolder).bind(sessions[position])
     }
 
     override fun getItemViewType(position: Int): Int {
-        return if (isErasePosition(position)) {
-            EraseViewHolder.LAYOUT_ID
-        } else {
-            SessionViewHolder.LAYOUT_ID
-        }
-    }
-
-    private fun isErasePosition(position: Int): Boolean {
-        return position == sessions.size
+        return SessionViewHolder.LAYOUT_ID
     }
 
     override fun getItemCount(): Int {
-        return sessions.size + 1
+        return sessions.size
     }
 
     override fun onSessionAdded(session: Session) {
-        onUpdate(fragment.requireComponents.sessionManager.sessions)
+        synchronized(this) {
+            this.sessions = fragment.requireComponents.sessionManager.sessions
+            if (sessions.contains(session)) {
+                notifyItemInserted(sessions.indexOf(session))
+            }
+        }
     }
 
     override fun onSessionRemoved(session: Session) {
-        onUpdate(fragment.requireComponents.sessionManager.sessions)
+        synchronized(this) {
+            val sessionToRemove = sessions.indexOf(session)
+            if (sessionToRemove >= 0) {
+                this.sessions = sessions.drop(sessionToRemove)
+                notifyItemRemoved(sessionToRemove)
+            }
+        }
     }
 
     override fun onSessionSelected(session: Session) {
-        onUpdate(fragment.requireComponents.sessionManager.sessions)
+        onSessionChanged(session)
     }
 
     override fun onAllSessionsRemoved() {
         onUpdate(fragment.requireComponents.sessionManager.sessions)
     }
 
+    fun onURLChanged(session: Session) {
+        onSessionChanged(session)
+    }
+
     private fun onUpdate(sessions: List<Session>) {
-        this.sessions = sessions
-        notifyDataSetChanged()
+        synchronized(this) {
+            this.sessions = sessions
+            notifyDataSetChanged()
+        }
+    }
+
+    private fun onSessionChanged(session: Session) {
+        synchronized(this) {
+            this.sessions = fragment.requireComponents.sessionManager.sessions
+            val index = sessions.indexOf(session)
+            if (index >= 0) {
+                notifyItemChanged(index)
+            }
+        }
     }
 }

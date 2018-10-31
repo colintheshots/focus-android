@@ -5,6 +5,7 @@
 package org.mozilla.focus.fragment
 
 import android.Manifest
+import android.animation.Animator
 import android.app.DownloadManager
 import android.app.PendingIntent
 import android.arch.lifecycle.LifecycleObserver
@@ -26,31 +27,41 @@ import android.os.Environment
 import android.preference.PreferenceManager
 import android.support.annotation.RequiresApi
 import android.support.design.widget.AppBarLayout
+import android.support.design.widget.BottomSheetBehavior
+import android.support.design.widget.BottomSheetBehavior.STATE_EXPANDED
+import android.support.design.widget.BottomSheetBehavior.STATE_COLLAPSED
+import android.support.design.widget.BottomSheetBehavior.from
 import android.support.design.widget.CoordinatorLayout
 import android.support.v4.app.ActivityCompat
 import android.support.v4.content.ContextCompat
-import android.support.v4.widget.SwipeRefreshLayout
+import android.support.v7.widget.GridLayoutManager
+import android.support.v7.widget.RecyclerView
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
+import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewAnimationUtils
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
 import android.webkit.URLUtil
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
-import android.widget.TextView
 import android.widget.Toast
+import kotlinx.android.synthetic.main.bottom_sheet_sessions.*
 import kotlinx.android.synthetic.main.browser_display_toolbar.*
+import kotlinx.android.synthetic.main.find_in_page.*
 import kotlinx.android.synthetic.main.fragment_browser.*
+import kotlinx.android.synthetic.main.toolbar.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -83,7 +94,7 @@ import org.mozilla.focus.popup.PopupUtils
 import org.mozilla.focus.session.SessionCallbackProxy
 import org.mozilla.focus.session.removeAndCloseAllSessions
 import org.mozilla.focus.session.removeAndCloseSession
-import org.mozilla.focus.session.ui.SessionsSheetFragment
+import org.mozilla.focus.session.ui.SessionsAdapter
 import org.mozilla.focus.telemetry.CrashReporterWrapper
 import org.mozilla.focus.telemetry.TelemetryWrapper
 import org.mozilla.focus.utils.AppConstants
@@ -93,10 +104,12 @@ import org.mozilla.focus.utils.StatusBarUtils
 import org.mozilla.focus.utils.SupportUtils
 import org.mozilla.focus.utils.UrlUtils
 import org.mozilla.focus.utils.ViewUtils
+import org.mozilla.focus.utils.asActivity
 import org.mozilla.focus.web.Download
 import org.mozilla.focus.web.HttpAuthenticationDialogBuilder
 import org.mozilla.focus.web.IWebView
 import org.mozilla.focus.widget.AnimatedProgressBar
+import org.mozilla.focus.widget.FloatingAddTabButton
 import org.mozilla.focus.widget.FloatingEraseButton
 import org.mozilla.focus.widget.FloatingSessionsButton
 import java.lang.ref.WeakReference
@@ -115,15 +128,9 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
 
     private var pendingDownload: Download? = null
     private var backgroundTransitionGroup: TransitionDrawableGroup? = null
-    private var urlView: TextView? = null
     private var progressView: AnimatedProgressBar? = null
     private var blockView: FrameLayout? = null
-    private var securityView: ImageView? = null
     private var menuView: ImageButton? = null
-    private var statusBar: View? = null
-    private var urlBar: View? = null
-    private var popupTint: FrameLayout? = null
-    private var swipeRefresh: SwipeRefreshLayout? = null
     private var menuWeakReference: WeakReference<BrowserMenu>? = WeakReference<BrowserMenu>(null)
 
     /**
@@ -132,25 +139,10 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
     private var videoContainer: ViewGroup? = null
 
     private var isFullscreen: Boolean = false
-
-    /**
-     * Container containing the browser chrome and web content.
-     */
-    private var browserContainer: View? = null
-
-    private var forwardButton: View? = null
-    private var backButton: View? = null
-    private var refreshButton: View? = null
-    private var stopButton: View? = null
-
+    private var findInPageViewHeight = 0
     private var findInPageView: View? = null
-    private var findInPageViewHeight: Int = 0
-    private var findInPageQuery: TextView? = null
-    private var findInPageResultTextView: TextView? = null
-    private var findInPageNext: ImageButton? = null
-    private var findInPagePrevious: ImageButton? = null
-    private var closeFindInPage: ImageButton? = null
 
+    private var sessionsAdapter: SessionsAdapter? = null
     private var fullscreenCallback: IWebView.FullscreenCallback? = null
 
     private var manager: DownloadManager? = null
@@ -170,7 +162,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
     // URL for error pages. The URL we show in the toolbar is (A) always correct and (B) what the
     // user is probably expecting to share, so lets use that here:
     val url: String
-        get() = urlView!!.text.toString()
+        get() = display_url.text.toString()
 
     var openedFromExternalLink: Boolean = false
 
@@ -220,7 +212,6 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         super.onStop()
     }
 
-    @Suppress("LongMethod", "ComplexMethod")
     override fun inflateLayout(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         if (savedInstanceState != null && savedInstanceState.containsKey(RESTORE_KEY_DOWNLOAD)) {
             // If this activity was destroyed before we could start a download (e.g. because we were waiting for a
@@ -228,26 +219,20 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
             pendingDownload = savedInstanceState.getParcelable(RESTORE_KEY_DOWNLOAD)
         }
 
-        val view = inflater.inflate(R.layout.fragment_browser, container, false)
+        return inflater.inflate(R.layout.fragment_browser, container, false)
+    }
 
-        videoContainer = view.findViewById<View>(R.id.video_container) as ViewGroup
-        browserContainer = view.findViewById(R.id.browser_container)
+    @Suppress("LongMethod")
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
 
-        urlBar = view.findViewById(R.id.urlbar)
-        statusBar = view.findViewById(R.id.status_bar_background)
+        videoContainer = view.findViewById(R.id.video_container)
+        display_url.setOnLongClickListener(this)
+        progressView = view.findViewById(R.id.progress)
+        findInPageView = view.findViewById(R.id.find_in_page)
 
-        popupTint = view.findViewById(R.id.popup_tint)
-
-        urlView = view.findViewById<View>(R.id.display_url) as TextView
-        urlView!!.setOnLongClickListener(this)
-
-        progressView = view.findViewById<View>(R.id.progress) as AnimatedProgressBar
-
-        swipeRefresh = view.findViewById<View>(R.id.swipe_refresh) as SwipeRefreshLayout
-        swipeRefresh!!.setColorSchemeResources(R.color.colorAccent)
-        swipeRefresh!!.isEnabled = Features.SWIPE_TO_REFRESH
-
-        swipeRefresh!!.setOnRefreshListener {
+        swipe_refresh.setColorSchemeResources(R.color.colorAccent)
+        swipe_refresh.isEnabled = Features.SWIPE_TO_REFRESH
+        swipe_refresh.setOnRefreshListener {
             reload()
 
             TelemetryWrapper.swipeReloadEvent()
@@ -255,10 +240,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
 
         findInPageView = view.findViewById(R.id.find_in_page)
 
-        findInPageQuery = view.findViewById(R.id.queryText)
-        findInPageResultTextView = view.findViewById(R.id.resultText)
-
-        findInPageQuery!!.addTextChangedListener(
+        queryText.addTextChangedListener(
             object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) {}
 
@@ -271,52 +253,41 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
                 }
             }
         )
-        findInPageQuery!!.setOnClickListener(this)
-        findInPageQuery!!.setOnEditorActionListener { _, actionId, _ ->
+        queryText.setOnClickListener(this)
+        queryText.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_DONE) {
-                ViewUtils.hideKeyboard(findInPageQuery!!)
-                findInPageQuery!!.isCursorVisible = false
+                ViewUtils.hideKeyboard(queryText)
+                queryText.isCursorVisible = false
             }
             false
         }
 
-        findInPagePrevious = view.findViewById(R.id.previousResult)
-        findInPagePrevious!!.setOnClickListener(this)
-
-        findInPageNext = view.findViewById(R.id.nextResult)
-        findInPageNext!!.setOnClickListener(this)
-
-        closeFindInPage = view.findViewById(R.id.close_find_in_page)
-        closeFindInPage!!.setOnClickListener(this)
+        previousResult.setOnClickListener(this)
+        nextResult.setOnClickListener(this)
+        close_find_in_page.setOnClickListener(this)
 
         setShouldRequestDesktop(session.shouldRequestDesktopSite)
 
         LoadTimeObserver.addObservers(session, this)
 
-        refreshButton = view.findViewById(R.id.refresh)
-        refreshButton?.let { it.setOnClickListener(this) }
+        refresh?.setOnClickListener(this)
+        stop?.setOnClickListener(this)
+        forward?.setOnClickListener(this)
+        back?.setOnClickListener(this)
 
-        stopButton = view.findViewById(R.id.stop)
-        stopButton?.let { it.setOnClickListener(this) }
+        block_image.setImageResource(R.drawable.ic_tracking_protection_disabled)
 
-        forwardButton = view.findViewById(R.id.forward)
-        forwardButton?.let { it.setOnClickListener(this) }
+        security_info.setImageResource(R.drawable.ic_internet)
+        security_info.setOnClickListener(this)
+        view.findViewById<ImageButton>(R.id.menuView).setOnClickListener(this)
 
-        backButton = view.findViewById(R.id.back)
-        backButton?.let { it.setOnClickListener(this) }
+        // Pre-calculate the height of the find in page UI so that we can accurately add padding
+        // to the WebView when we present it.
+        find_in_page.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+        findInPageViewHeight = find_in_page.measuredHeight
 
-        val blockIcon = view.findViewById<View>(R.id.block_image) as ImageView
-        blockIcon.setImageResource(R.drawable.ic_tracking_protection_disabled)
-
-        blockView = view.findViewById<View>(R.id.block) as FrameLayout
-
-        securityView = view.findViewById(R.id.security_info)
-
-        securityView!!.setImageResource(R.drawable.ic_internet)
-
-        securityView!!.setOnClickListener(this)
-
-        menuView = view.findViewById<View>(R.id.menuView) as ImageButton
+        blockView = view.findViewById(R.id.block)
+        menuView = view.findViewById(R.id.menuView)
         menuView!!.setOnClickListener(this)
 
         if (session.isCustomTabSession()) {
@@ -325,15 +296,6 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
             initialiseNormalBrowserUi(view)
         }
 
-        // Pre-calculate the height of the find in page UI so that we can accurately add padding
-        // to the WebView when we present it.
-        findInPageView!!.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
-        findInPageViewHeight = findInPageView!!.measuredHeight
-
-        return view
-    }
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         session.register(sessionObserver, owner = this)
 
         // We need to update the views with the initial values. Other than LiveData an Observer doesn't get the initial
@@ -349,36 +311,52 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
 
     private fun initialiseNormalBrowserUi(view: View) {
         val eraseButton = view.findViewById<FloatingEraseButton>(R.id.erase)
+        val addTabButton = view.findViewById<FloatingAddTabButton>(R.id.fab_add_tab_bottom_sheet)
         eraseButton.setOnClickListener(this)
-
-        urlView!!.setOnClickListener(this)
-
-        val tabsButton = view.findViewById<FloatingSessionsButton>(R.id.tabs)
-        tabsButton.setOnClickListener(this)
+        display_url.setOnClickListener(this)
 
         val sessionManager = requireComponents.sessionManager
         sessionManager.register(object : SessionManager.Observer {
             override fun onSessionAdded(session: Session) {
-                tabsButton.updateSessionsCount(sessionManager.sessions.size)
                 eraseButton.updateSessionsCount(sessionManager.sessions.size)
+                addTabButton.tabCount = sessionManager.sessions.size
             }
 
             override fun onSessionRemoved(session: Session) {
-                tabsButton.updateSessionsCount(sessionManager.sessions.size)
                 eraseButton.updateSessionsCount(sessionManager.sessions.size)
+                addTabButton.tabCount = sessionManager.sessions.size
             }
 
             override fun onAllSessionsRemoved() {
-                tabsButton.updateSessionsCount(sessionManager.sessions.size)
                 eraseButton.updateSessionsCount(sessionManager.sessions.size)
+                addTabButton.tabCount = sessionManager.sessions.size
             }
         })
 
-        tabsButton.updateSessionsCount(sessionManager.sessions.size)
         eraseButton.updateSessionsCount(sessionManager.sessions.size)
+        addTabButton.tabCount = sessionManager.sessions.size
+
+        initialiseBottomSheet(view, fab_add_tab_bottom_sheet)
+    }
+
+    private fun initialiseBottomSheet(
+        view: View,
+        addTabButton: FloatingAddTabButton?
+    ) {
+        bottom_sheet_sessions_layout?.visibility = View.VISIBLE
+        handle_bottom_sheet?.setOnClickListener(this)
+        val recyclerViewTabs: RecyclerView? = view.findViewById(R.id.recycler_tabs)
+        recyclerViewTabs?.setHasFixedSize(true)
+        sessionsAdapter = SessionsAdapter(this, requireComponents.sessionManager.sessions)
+        recyclerViewTabs?.adapter = sessionsAdapter
+        requireComponents.sessionManager.register(sessionsAdapter!!, owner = this)
+        recyclerViewTabs?.layoutManager = GridLayoutManager(context, SPAN_COUNT)
+        addTabButton?.setOnClickListener(this)
+        bottomSheetBehavior.setBottomSheetCallback(bottomSheetBehaviorCallback)
     }
 
     private fun initialiseCustomTabUi(view: View) {
+        bottom_sheet_sessions_layout?.visibility = View.GONE
         val customTabConfig = session.customTabConfig!!
 
         // Unfortunately there's no simpler way to have the FAB only in normal-browser mode.
@@ -397,10 +375,10 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         val textColor: Int
 
         if (customTabConfig.toolbarColor != null) {
-            urlBar!!.setBackgroundColor(customTabConfig.toolbarColor!!)
+            urlbar.setBackgroundColor(customTabConfig.toolbarColor!!)
 
             textColor = ColorUtils.getReadableTextColor(customTabConfig.toolbarColor!!)
-            urlView!!.setTextColor(textColor)
+            display_url.setTextColor(textColor)
         } else {
             textColor = Color.WHITE
         }
@@ -420,7 +398,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         }
 
         if (customTabConfig.disableUrlbarHiding) {
-            val params = urlBar!!.layoutParams as AppBarLayout.LayoutParams
+            val params = urlbar.layoutParams as AppBarLayout.LayoutParams
             params.scrollFlags = 0
         }
 
@@ -463,7 +441,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         }
 
         // We need to tint some icons.. We already tinted the close button above. Let's tint our other icons too.
-        securityView!!.setColorFilter(textColor)
+        security_info.setColorFilter(textColor)
 
         val menuIcon = DrawableUtils.loadAndTintDrawable(requireContext(), R.drawable.ic_menu, textColor)
         menuView!!.setImageDrawable(menuIcon)
@@ -525,7 +503,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
                 // View is passed in as null for GeckoView fullscreen
                 if (view != null) {
                     // Hide browser UI and web content
-                    browserContainer!!.visibility = View.INVISIBLE
+                    browser_container.visibility = View.INVISIBLE
 
                     // Add view to video container and make it visible
                     val params = FrameLayout.LayoutParams(
@@ -540,7 +518,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
                     appbar?.setExpanded(false, true)
                     (getWebView() as? NestedGeckoView)?.isNestedScrollingEnabled = false
                     // Hide status bar when entering fullscreen with GeckoView
-                    statusBar!!.visibility = View.GONE
+                    status_bar_background.visibility = View.GONE
                     // Switch to immersive mode: Hide system bars other UI controls
                     switchToImmersiveMode()
                 }
@@ -559,10 +537,10 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
                 videoContainer!!.visibility = View.GONE
 
                 // Show browser UI and web content again
-                browserContainer!!.visibility = View.VISIBLE
+                browser_container.visibility = View.VISIBLE
 
                 // Show status bar again (hidden in GeckoView versions)
-                statusBar!!.visibility = View.VISIBLE
+                status_bar_background.visibility = View.VISIBLE
 
                 exitImmersiveModeIfNeeded()
 
@@ -622,11 +600,11 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         val window = activity.window
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-            or View.SYSTEM_UI_FLAG_FULLSCREEN
-            or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY)
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY)
     }
 
     /**
@@ -706,7 +684,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
 
         crashReporterFragment.onCloseTabPressed = { sendCrashReport ->
             if (sendCrashReport) { CrashReporterWrapper.submitCrash(crash) }
-            erase()
+            erase(true)
             hideCrashReporter()
         }
 
@@ -717,11 +695,10 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
                 .commit()
 
         crash_container.visibility = View.VISIBLE
-        tabs.hide()
         erase.hide()
-        securityView?.setImageResource(R.drawable.ic_firefox)
+        security_info?.setImageResource(R.drawable.ic_firefox)
         menuView?.visibility = View.GONE
-        urlView?.text = requireContext().getString(R.string.tab_crash_report_title)
+        display_url?.text = requireContext().getString(R.string.tab_crash_report_title)
     }
 
     private fun hideCrashReporter() {
@@ -735,11 +712,10 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
                 .commit()
 
         crash_container.visibility = View.GONE
-        tabs.show()
         erase.show()
-        securityView?.setImageResource(R.drawable.ic_internet)
+        security_info?.setImageResource(R.drawable.ic_internet)
         menuView?.visibility = View.VISIBLE
-        urlView?.text = session.let {
+        display_url?.text = session.let {
             if (it.isSearch) it.searchTerms else it.url
         }
     }
@@ -804,7 +780,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
 
     override fun onCreateViewCalled() {
         manager = requireContext().getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        downloadBroadcastReceiver = DownloadBroadcastReceiver(browserContainer, manager)
+        downloadBroadcastReceiver = DownloadBroadcastReceiver(browser_container, manager)
 
         val webView = getWebView()
         webView?.setFindListener(findInPageCoordinator)
@@ -832,8 +808,8 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
             pendingDownload = null
         }
 
-        StatusBarUtils.getStatusBarHeight(statusBar) { statusBarHeight ->
-            statusBar!!.layoutParams.height = statusBarHeight
+        StatusBarUtils.getStatusBarHeight(status_bar_background) { statusBarHeight ->
+            status_bar_background.layoutParams.height = statusBarHeight
         }
 
         if (Biometrics.isBiometricsEnabled(requireContext())) {
@@ -850,6 +826,8 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
             biometricController = null
             view!!.alpha = 1f
         }
+
+        updateFabVisibility(bottomSheetBehavior.state)
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
@@ -930,43 +908,45 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
 
     @Suppress("ComplexMethod")
     fun onBackPressed(): Boolean {
-        if (findInPageView!!.visibility == View.VISIBLE) {
+        if (find_in_page.visibility == View.VISIBLE) {
             hideFindInPage()
         } else if (isFullscreen) {
             val webView = getWebView()
             webView?.exitFullscreen()
+        } else if (bottomSheetBehavior.state == STATE_EXPANDED) {
+            closeBottomSheet()
         } else if (canGoBack()) {
             // Go back in web history
             goBack()
-        } else {
-            if (session.source == Session.Source.ACTION_VIEW || session.isCustomTabSession()) {
-                TelemetryWrapper.eraseBackToAppEvent()
+        } else if (session.source == Session.Source.ACTION_VIEW || session.isCustomTabSession()) {
+            TelemetryWrapper.eraseBackToAppEvent()
 
-                // This session has been started from a VIEW intent. Go back to the previous app
-                // immediately and erase the current browsing session.
-                erase()
+            // This session has been started from a VIEW intent. Go back to the previous app
+            // immediately and erase the current browsing session.
+            erase(false)
 
-                // If there are no other sessions then we remove the whole task because otherwise
-                // the old session might still be partially visible in the app switcher.
-                if (requireComponents.sessionManager.sessions.isEmpty()) {
-                    requireActivity().finishAndRemoveTask()
-                } else {
-                    requireActivity().finish()
-                }
-                // We can't show a snackbar outside of the app. So let's show a toast instead.
-                Toast.makeText(context, R.string.feedback_erase_custom_tab, Toast.LENGTH_SHORT).show()
+            // If there are no other sessions then we remove the whole task because otherwise
+            // the old session might still be partially visible in the app switcher.
+            if (requireComponents.sessionManager.sessions.isEmpty()) {
+                requireActivity().finishAndRemoveTask()
             } else {
-                // Just go back to the home screen.
-                TelemetryWrapper.eraseBackToHomeEvent()
-
-                erase()
+                requireActivity().finish()
             }
+            // We can't show a snackbar outside of the app. So let's show a toast instead.
+            Toast.makeText(context, R.string.feedback_erase_custom_tab, Toast.LENGTH_SHORT).show()
+        } else if (requireComponents.sessionManager.sessions.size > 1) {
+            requireComponents.sessionManager.remove(session)
+        } else {
+            // Just go back to the home screen.
+            TelemetryWrapper.eraseBackToHomeEvent()
+
+            erase(false)
         }
 
         return true
     }
 
-    fun erase() {
+    fun erase(allSessions: Boolean) {
         val webView = getWebView()
         val context = context
 
@@ -984,7 +964,11 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
 
         webView?.cleanup()
 
-        requireComponents.sessionManager.removeAndCloseSession(session)
+        if (allSessions) {
+            requireComponents.sessionManager.removeAndCloseAllSessions()
+        } else {
+            requireComponents.sessionManager.removeAndCloseSession(session)
+        }
     }
 
     private fun shareCurrentUrl() {
@@ -1009,6 +993,14 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         TelemetryWrapper.shareEvent()
     }
 
+    fun closeBottomSheet() {
+        bottomSheetBehavior.state = STATE_COLLAPSED
+    }
+
+    fun openBottomSheet() {
+        bottomSheetBehavior.state = STATE_EXPANDED
+    }
+
     @Suppress("ComplexMethod")
     override fun onClick(view: View) {
         when (view.id) {
@@ -1023,7 +1015,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
                     !crashReporterIsVisible() &&
                     requireComponents.sessionManager.findSessionById(session.id) != null) {
                 val urlFragment = UrlInputFragment
-                    .createWithSession(session, urlView!!)
+                    .createWithSession(session, display_url)
 
                 requireActivity().supportFragmentManager
                     .beginTransaction()
@@ -1034,16 +1026,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
             R.id.erase -> {
                 TelemetryWrapper.eraseEvent()
 
-                erase()
-            }
-
-            R.id.tabs -> {
-                requireActivity().supportFragmentManager
-                    .beginTransaction()
-                    .add(R.id.container, SessionsSheetFragment(), SessionsSheetFragment.FRAGMENT_TAG)
-                    .commit()
-
-                TelemetryWrapper.openTabsTrayEvent()
+                erase(true)
             }
 
             R.id.back -> {
@@ -1131,7 +1114,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
             }
 
             R.id.customtab_close -> {
-                erase()
+                erase(false)
                 requireActivity().finish()
 
                 TelemetryWrapper.closeCustomTabEvent()
@@ -1169,28 +1152,79 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
 
             R.id.find_in_page -> {
                 showFindInPage()
-                ViewUtils.showKeyboard(findInPageQuery)
+                ViewUtils.showKeyboard(queryText)
                 TelemetryWrapper.findInPageMenuEvent()
             }
 
-            R.id.queryText -> findInPageQuery!!.isCursorVisible = true
+            R.id.queryText -> queryText.isCursorVisible = true
 
             R.id.nextResult -> {
-                ViewUtils.hideKeyboard(findInPageQuery!!)
-                findInPageQuery!!.isCursorVisible = false
+                ViewUtils.hideKeyboard(queryText)
+                queryText.isCursorVisible = false
 
                 getWebView()?.findNext(true)
             }
 
             R.id.previousResult -> {
-                ViewUtils.hideKeyboard(findInPageQuery!!)
-                findInPageQuery!!.isCursorVisible = false
+                ViewUtils.hideKeyboard(queryText)
+                queryText.isCursorVisible = false
 
                 getWebView()?.findNext(false)
             }
 
             R.id.close_find_in_page -> {
                 hideFindInPage()
+            }
+
+            R.id.handle_bottom_sheet -> {
+                when (bottomSheetBehavior.state) {
+                    STATE_EXPANDED -> {
+                        closeBottomSheet()
+                    }
+                    STATE_COLLAPSED ->
+                        openBottomSheet()
+                    else -> {
+                    }
+                }
+            }
+
+            R.id.fab_add_tab_bottom_sheet -> {
+                val displayMetrics = DisplayMetrics()
+                view.context.asActivity()!!.windowManager.defaultDisplay.getMetrics(displayMetrics)
+                val circView = view.rootView.findViewById<View>(R.id.circular_reveal_view)
+                val midCircX = (view.x + view.width / 2).toInt()
+                val midCircY = (view.y + view.height / 2 + bottom_sheet_sessions_layout.y).toInt()
+                val circularReveal = ViewAnimationUtils.createCircularReveal(
+                    circView, midCircX, midCircY, 0F,
+                    Math.hypot(displayMetrics.widthPixels.toDouble(),
+                        displayMetrics.heightPixels.toDouble()).toFloat()
+                )
+                circularReveal.interpolator = AccelerateDecelerateInterpolator()
+                circularReveal.duration = NEW_TAB_ANIMATION_DURATION
+                if (context == null) return // handle multiple clicks
+
+                circularReveal.addListener(object : Animator.AnimatorListener {
+                    override fun onAnimationRepeat(animation: Animator?) {
+                    }
+
+                    override fun onAnimationEnd(animation: Animator?) {
+                        requireActivity().supportFragmentManager
+                            .beginTransaction()
+                            .addToBackStack(null)
+                            .replace(R.id.container,
+                                UrlInputFragment.createWithBackground(),
+                                UrlInputFragment.FRAGMENT_TAG)
+                            .commit()
+                    }
+
+                    override fun onAnimationCancel(animation: Animator?) {
+                    }
+
+                    override fun onAnimationStart(animation: Animator?) {
+                        circView.visibility = View.VISIBLE
+                    }
+                })
+                circularReveal.start()
             }
 
             else -> throw IllegalArgumentException("Unhandled menu item in BrowserFragment")
@@ -1200,7 +1234,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
     @Suppress("MagicNumber")
     private fun updateToolbarButtonStates(isLoading: Boolean) {
         @Suppress("ComplexCondition")
-        if (forwardButton == null || backButton == null || refreshButton == null || stopButton == null) {
+        if (forward == null || back == null || refresh == null || stop == null) {
             return
         }
 
@@ -1209,13 +1243,13 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         val canGoForward = webView.canGoForward()
         val canGoBack = webView.canGoBack()
 
-        forwardButton!!.isEnabled = canGoForward
-        forwardButton!!.alpha = if (canGoForward) 1.0f else 0.5f
-        backButton!!.isEnabled = canGoBack
-        backButton!!.alpha = if (canGoBack) 1.0f else 0.5f
+        forward!!.isEnabled = canGoForward
+        forward!!.alpha = if (canGoForward) 1.0f else 0.5f
+        back!!.isEnabled = canGoBack
+        back!!.alpha = if (canGoBack) 1.0f else 0.5f
 
-        refreshButton!!.visibility = if (isLoading) View.GONE else View.VISIBLE
-        stopButton!!.visibility = if (isLoading) View.VISIBLE else View.GONE
+        refresh!!.visibility = if (isLoading) View.GONE else View.VISIBLE
+        stop!!.visibility = if (isLoading) View.VISIBLE else View.GONE
     }
 
     fun canGoForward(): Boolean = getWebView()?.canGoForward() ?: false
@@ -1237,7 +1271,8 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         val webView = getWebView()
         webView?.setBlockingEnabled(enabled)
 
-        statusBar!!.setBackgroundResource(if (enabled)
+        status_bar_background.setBackgroundResource(
+            if (enabled)
                 R.drawable.animated_background
             else
                 R.drawable.animated_background_disabled
@@ -1246,18 +1281,20 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         backgroundTransitionGroup = if (!session.isCustomTabSession()) {
             // Only update the toolbar background if this is not a custom tab. Custom tabs set their
             // own color and we do not want to override this here.
-            urlBar!!.setBackgroundResource(if (enabled)
+            urlbar.setBackgroundResource(
+                if (enabled)
                     R.drawable.animated_background
                 else
-                    R.drawable.animated_background_disabled)
+                    R.drawable.animated_background_disabled
+            )
 
             TransitionDrawableGroup(
-                urlBar!!.background as TransitionDrawable,
-                statusBar!!.background as TransitionDrawable
+                urlbar.background as TransitionDrawable,
+                status_bar_background.background as TransitionDrawable
             )
         } else {
             TransitionDrawableGroup(
-                statusBar!!.background as TransitionDrawable
+                status_bar_background.background as TransitionDrawable
             )
         }
     }
@@ -1281,15 +1318,15 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         }
         val securityPopup = PopupUtils.createSecurityPopup(requireContext(), session)
         if (securityPopup != null) {
-            securityPopup.setOnDismissListener { popupTint!!.visibility = View.GONE }
+            securityPopup.setOnDismissListener { popup_tint.visibility = View.GONE }
             securityPopup.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             securityPopup.animationStyle = android.R.style.Animation_Dialog
             securityPopup.isTouchable = true
             securityPopup.isFocusable = true
             securityPopup.elevation = resources.getDimension(R.dimen.menu_elevation)
             val offsetY = requireContext().resources.getDimensionPixelOffset(R.dimen.doorhanger_offsetY)
-            securityPopup.showAtLocation(urlBar, Gravity.TOP or Gravity.CENTER_HORIZONTAL, 0, offsetY)
-            popupTint!!.visibility = View.VISIBLE
+            securityPopup.showAtLocation(urlbar, Gravity.TOP or Gravity.CENTER_HORIZONTAL, 0, offsetY)
+            popup_tint.visibility = View.VISIBLE
         }
     }
 
@@ -1315,12 +1352,12 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
     }
 
     private fun showFindInPage() {
-        findInPageView!!.visibility = View.VISIBLE
-        findInPageQuery!!.requestFocus()
+        find_in_page.visibility = View.VISIBLE
+        queryText.requestFocus()
 
-        val params = swipeRefresh!!.layoutParams as CoordinatorLayout.LayoutParams
+        val params = swipe_refresh.layoutParams as CoordinatorLayout.LayoutParams
         params.bottomMargin = findInPageViewHeight
-        swipeRefresh!!.layoutParams = params
+        swipe_refresh.layoutParams = params
     }
 
     private fun hideFindInPage() {
@@ -1328,14 +1365,14 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
 
         webView.clearMatches()
         findInPageCoordinator.reset()
-        findInPageView!!.visibility = View.GONE
-        findInPageQuery!!.text = ""
-        findInPageQuery!!.clearFocus()
+        find_in_page.visibility = View.GONE
+        queryText.setText("")
+        queryText.clearFocus()
 
-        val params = swipeRefresh!!.layoutParams as CoordinatorLayout.LayoutParams
+        val params = swipe_refresh.layoutParams as CoordinatorLayout.LayoutParams
         params.bottomMargin = 0
-        swipeRefresh!!.layoutParams = params
-        ViewUtils.hideKeyboard(findInPageQuery!!)
+        swipe_refresh.layoutParams = params
+        ViewUtils.hideKeyboard(queryText)
     }
 
     override fun applyLocale() {
@@ -1351,7 +1388,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
 
     private fun updateSecurityIcon(session: Session, securityInfo: Session.SecurityInfo = session.securityInfo) {
         if (crashReporterIsVisible()) return
-        val securityView = securityView ?: return
+        val securityView = security_info ?: return
 
         if (!session.loading) {
             if (securityInfo.secure) {
@@ -1376,10 +1413,10 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         val context = context ?: return
 
         if (numberOfMatches > 0) {
-            findInPageNext!!.setColorFilter(resources.getColor(R.color.photonWhite))
-            findInPageNext!!.alpha = 1.0f
-            findInPagePrevious!!.setColorFilter(resources.getColor(R.color.photonWhite))
-            findInPagePrevious!!.alpha = 1.0f
+            nextResult.setColorFilter(resources.getColor(R.color.photonWhite))
+            nextResult.alpha = 1.0f
+            previousResult.setColorFilter(resources.getColor(R.color.photonWhite))
+            previousResult.alpha = 1.0f
             // We don't want the presentation of the activeMatchOrdinal to be zero indexed. So let's
             // increment it by one for WebView.
             if (!AppConstants.isGeckoBuild) {
@@ -1389,22 +1426,24 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
             val visibleString = String.format(
                 context.getString(R.string.find_in_page_result),
                 actualActiveMatchOrdinal,
-                numberOfMatches)
+                numberOfMatches
+            )
 
             val accessibleString = String.format(
                 context.getString(R.string.find_in_page_result),
                 actualActiveMatchOrdinal,
-                numberOfMatches)
+                numberOfMatches
+            )
 
-            findInPageResultTextView!!.text = visibleString
-            findInPageResultTextView!!.contentDescription = accessibleString
+            resultText.text = visibleString
+            resultText.contentDescription = accessibleString
         } else {
-            findInPageNext!!.setColorFilter(resources.getColor(R.color.photonGrey10))
-            findInPageNext!!.alpha = 0.4f
-            findInPagePrevious!!.setColorFilter(resources.getColor(R.color.photonWhite))
-            findInPagePrevious!!.alpha = 0.4f
-            findInPageResultTextView!!.text = ""
-            findInPageResultTextView!!.contentDescription = ""
+            nextResult.setColorFilter(resources.getColor(R.color.photonGrey10))
+            nextResult.alpha = 0.4f
+            previousResult.setColorFilter(resources.getColor(R.color.photonWhite))
+            previousResult.alpha = 0.4f
+            resultText.text = ""
+            resultText.contentDescription = ""
         }
     }
 
@@ -1422,7 +1461,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
                     backgroundTransitionGroup!!.startTransition(ANIMATION_DURATION)
                     progressView!!.visibility = View.GONE
                 }
-                swipeRefresh!!.isRefreshing = false
+                swipe_refresh?.isRefreshing = false
 
                 updateSecurityIcon(session)
             }
@@ -1440,6 +1479,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         }
 
         override fun onUrlChanged(session: Session, url: String) {
+            sessionsAdapter?.onURLChanged(session)
             val host = try {
                 URL(url).host
             } catch (_: MalformedURLException) {
@@ -1450,7 +1490,7 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
                 host != null && ExceptionDomains.load(requireContext()).contains(host)
             getWebView()?.setBlockingEnabled(!isException)
 
-            urlView?.text = UrlUtils.stripUserInfo(url)
+            display_url?.text = UrlUtils.stripUserInfo(url)
         }
 
         override fun onProgress(session: Session, progress: Int) {
@@ -1478,11 +1518,46 @@ class BrowserFragment : WebFragment(), LifecycleObserver, View.OnClickListener,
         showCrashReporter(crash)
     }
 
+    private val bottomSheetBehavior
+        get() = from(bottom_sheet_sessions_layout)
+
+    private val bottomSheetBehaviorCallback = object : BottomSheetBehavior.BottomSheetCallback() {
+        override fun onStateChanged(bottomSheet: View, newState: Int) {
+            updateFabVisibility(newState)
+        }
+
+        override fun onSlide(bottomSheet: View, slideOffset: Float) {
+            if (isAdded && slideOffset in VISIBLE_TINT_SLIDE_RANGE) {
+                popup_tint?.visibility = View.VISIBLE
+                popup_tint?.setOnClickListener {
+                    bottomSheetBehavior.state = STATE_COLLAPSED
+                }
+                handle_bottom_sheet?.visibility = View.GONE
+                popup_tint?.alpha = slideOffset * FULL_TINT_ALPHA
+            } else {
+                popup_tint?.visibility = View.GONE
+                popup_tint?.setOnClickListener(null)
+                handle_bottom_sheet?.visibility = View.VISIBLE
+                popup_tint?.alpha = FULL_TINT_ALPHA
+            }
+        }
+    }
+
+    private fun updateFabVisibility(newState: Int) {
+        fab_add_tab_bottom_sheet?.handleState(newState)
+        erase?.handleState(newState)
+        handle_bottom_sheet?.visibility = if (newState == STATE_COLLAPSED) View.VISIBLE else View.GONE
+    }
+
     companion object {
         const val FRAGMENT_TAG = "browser"
 
+        private const val SPAN_COUNT = 3
         private const val REQUEST_CODE_STORAGE_PERMISSION = 101
         private const val ANIMATION_DURATION = 300
+        const val NEW_TAB_ANIMATION_DURATION = 500L
+        private val VISIBLE_TINT_SLIDE_RANGE = 0.1F..1F
+        private const val FULL_TINT_ALPHA = 0.5F
 
         private const val ARGUMENT_SESSION_UUID = "sessionUUID"
         private const val RESTORE_KEY_DOWNLOAD = "download"

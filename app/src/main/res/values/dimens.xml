@@ -5,7 +5,8 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <dimen name="menu_elevation">8dp</dimen>
 
-    <dimen name="floating_action_button_margin">16dp</dimen>
+    <dimen name="floating_action_button_bottom_margin">48dp</dimen>
+    <dimen name="floating_action_button_end_margin">16dp</dimen>
 
     <item name="match_parent" type="dimen">-1</item>
     <!-- We specifically want match_parent here. If we set -1, the build breaks since integers aren't allowed.
